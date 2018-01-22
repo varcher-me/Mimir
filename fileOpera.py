@@ -5,7 +5,9 @@ import win32con
 import time
 import os
 import shutil
+import traceback
 import logger
+import Calchash as calchash
 
 path_init = 'd:\\temp\\init\\'
 path_processed = 'd:\\temp\\init\\'   # todo:改为正确目录
@@ -16,6 +18,19 @@ file_printed = 'PrintedPDF.pdf'
 retry_interval = 0.2
 retry_seconds = 20
 logger = logger.logger
+
+
+class FileOperaException(Exception):
+    pass
+
+
+def compare_file(file1, file2):
+    hash1 = calchash.calc_sha1(file1)
+    hash2 = calchash.calc_sha1(file2)
+    if 0 == hash1 or 0 == hash2 or not hash1 == hash2:
+        return False
+    else:
+        return True
 
 
 def get_window(hwnd_father, hwnd_child_after, window_class, window_context):
@@ -30,7 +45,7 @@ def get_window(hwnd_father, hwnd_child_after, window_class, window_context):
     if hwnd:
         return hwnd
     else:
-        return False    # todo:窗口没有出现，抛异常
+        raise FileOperaException("Wait for window appear timed out.")
 
 
 def wait_window_disappear(hwnd):
@@ -42,7 +57,7 @@ def wait_window_disappear(hwnd):
             retry_time -= 1
         else:
             return True
-    return False    # todo:窗口没有消失，抛异常
+    raise FileOperaException("Wait for window disappear timed out.")
 
 
 def wait_for_file(full_file):
@@ -59,22 +74,41 @@ def wait_for_file(full_file):
                 retry_time -= 1
         else:
             retry_time -= 1
-    return False    # todo:文件没有出现，抛异常
+    raise FileOperaException("Wait for file "+full_file+" appear timed out.")
 
 
-def rename_file(printed_file, new_file):
-    printed_file = os.path.join(path_printed, file_printed)
-    if wait_for_file(printed_file):
-        os.rename(printed_file, new_file)
-        shutil.move(new_file, path_result)
-        print("File"+new_file+" moved.")
+def rename_file(printed_file, renamed_file):
+    wait_for_file(printed_file)
+    if os.path.isfile(renamed_file):
+        if compare_file(printed_file, renamed_file):
+            logger.warning("File ["+renamed_file+"] existed when renamed, sha1 is identity, origin is remained.")
+            os.remove(printed_file)
+            return True
+        else:
+            logger.warning("File ["+renamed_file+"] existed when renamed, sha1 is different, incoming is remained.")
+            os.remove(renamed_file)
+    count = 0
+    os.rename(printed_file, renamed_file)
 
 
-def process_file(path, file):
+def move_file(origin_file, new_file, new_path):
+    if os.path.isfile(new_file):
+        if compare_file(origin_file, new_file):
+            logger.warning("File ["+new_file+"] existed when copied, sha1 is identity, origin is remained.")
+            os.remove(origin_file)
+            return True
+        else:
+            logger.warning("File ["+new_file+"] existed when copied, sha1 is different, incoming is remained.")
+            os.remove(new_file)
+    shutil.move(origin_file, new_path)
+    print("File "+new_file+" moved.")
+
+
+def process_file(path, raw_file):
     # 打开文件
-    print("Starting processing "+file)
-    win32api.ShellExecute(0, 'open', path+file, '', '', 1)
-    hwnd_main_sep = get_window(None, None, None, 'SEP Reader - [' + file + ']')
+    print("Starting processing " + raw_file)
+    win32api.ShellExecute(0, 'open', path + raw_file, '', '', 1)
+    hwnd_main_sep = get_window(None, None, None, 'SEP Reader - [' + raw_file + ']')
     if 0 == hwnd_main_sep:
         logger.fatal("FATAL ERROR: SEP Reader Window not found! program terminated.")
         exit(100)
@@ -92,7 +126,7 @@ def process_file(path, file):
     win32api.keybd_event(13, 0, 0, 0)  # Enter
     win32api.keybd_event(13, 0, win32con.KEYEVENTF_KEYUP, 0)
     if not wait_window_disappear(hwnd_printer):
-        logger.error("File [" + file + "] print-window-disappear timed out; WM_CLOSE signal sent.")
+        logger.error("File [" + raw_file + "] print-window-disappear timed out; WM_CLOSE signal sent.")
         win32api.SendMessage(hwnd_printer, win32con.WM_CLOSE, 0, 0)
 
     # 窗口清理（SEP为关闭文件，保留程序窗口）
@@ -101,23 +135,24 @@ def process_file(path, file):
     win32api.keybd_event(87, 0, 0, 0)  # W
     win32api.keybd_event(17, 0, win32con.KEYEVENTF_KEYUP, 0)
     win32api.keybd_event(87, 0, win32con.KEYEVENTF_KEYUP, 0)
-    print("File "+file+" printed.")
+    print("File " + raw_file + " printed.")
     # win32api.SendMessage(hwnd_main, win32con.WM_CLOSE, 0, 0)
 
-    # 移动新文件
-    count = 0
     printed_file = os.path.join(path_printed, file_printed)
-    new_file = os.path.join(path_printed, file+'.pdf')
-    while count < 5:
-        try:
-            rename_file(printed_file, new_file)
-            logger.info("File ["+new_file+"] Processed successfully.")
-            break;
-        except:
-            time.sleep(0.5)
-            count += 1
-    if 5 == count:
-        logger.fatal("FATAL ERROR: move file ["+new_file+"] failed. Process Terminated.")
+    renamed_file = os.path.join(path_printed, raw_file + '.pdf')
+    moved_file = os.path.join(path_result, raw_file + '.pdf')
+    # 重命名文件
+    try:
+        rename_file(printed_file, renamed_file)
+    except Exception as e:
+        logger.fatal("FATAL ERROR: rename file failed, exception is "+str(e)+", process terminated.")
+        exit(100)
+    # 移动文件
+    try:
+        move_file(renamed_file, moved_file, path_result)
+    except Exception as e:
+        logger.fatal("FATAL ERROR: move file failed, exception is "+str(e)+", process terminated.")
+        exit(101)
 
 
 for i in os.walk(path_init):

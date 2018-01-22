@@ -10,6 +10,7 @@ handler_error.setLevel(logging.ERROR)
 fmt = '%(asctime)s - %(filename)s:%(lineno)s - %(name)s - %(message)s'
 formatter = logging.Formatter(fmt)  # 实例化formatter
 handler.setFormatter(formatter)  # 为handler添加formatter
+handler_error.setFormatter(formatter)
 logger = logging.getLogger('tst')  # 获取名为tst的logger
 logger.addHandler(handler)  # 为logger添加handler
 logger.addHandler(handler_error)
